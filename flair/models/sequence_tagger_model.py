@@ -43,6 +43,7 @@ class SequenceTagger(flair.nn.Classifier[Sentence]):
         loss_weights: Optional[Dict[str, float]] = None,
         init_from_state_dict: bool = False,
         allow_unk_predictions: bool = False,
+        distillation: bool = False,
     ) -> None:
         """Sequence Tagger class for predicting labels for single tokens. Can be parameterized by several attributes.
 
@@ -186,6 +187,11 @@ class SequenceTagger(flair.nn.Classifier[Sentence]):
             self.linear = torch.nn.Linear(embedding_dim, len(self.label_dictionary))
             self.train_initial_hidden_state = False
 
+        # ----- distillation -----
+        if use_crf and distillation:
+            raise ValueError("Distillation is not supported with CRF.")
+        self.distillation = distillation
+
         # the loss function is Viterbi if using CRF, else regular Cross Entropy Loss
         self.loss_function = (
             ViterbiLoss(self.label_dictionary)
@@ -272,7 +278,17 @@ class SequenceTagger(flair.nn.Classifier[Sentence]):
         if len(sentences) == 0:
             return torch.tensor(0.0, dtype=torch.float, device=flair.device, requires_grad=True), 0
         sentences = sorted(sentences, key=len, reverse=True)
-        gold_labels = self._prepare_label_tensor(sentences)
+        if self.distillation:
+            try:
+                # extract teacher logits from sentences
+                logits = [sent.logits for sent in sentences]
+                # convert logits to probabilities for using torch cross-entropy loss
+                gold_labels = torch.cat(logits).softmax(dim=-1)
+            except Exception as e:
+                print(f"Exception: {e}")
+                raise ValueError("Distillation requires logits to be stored in Sentence object.")
+        else:
+            gold_labels = self._prepare_label_tensor(sentences)
         sentence_tensor, lengths = self._prepare_tensors(sentences)
 
         # forward pass to get scores
